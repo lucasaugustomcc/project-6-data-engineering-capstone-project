@@ -4,6 +4,10 @@ import logging
 import pandas as pd
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType, Row
+import matplotlib.pyplot as plt
+import seaborn as sns
+from pyspark.sql.functions import isnull, isnan, when, count, col
+
 # Set logging config
 logging.basicConfig()
 logger = logging.getLogger(__file__)
@@ -31,10 +35,20 @@ def main():
     logger.info("Dimensional data loaded.")
 
     logger.info("Cleaning data")
-    ports_df = clean_ports_data(ports_df)
+
+    # drop columns with over 90% missing values
+    cols = ['occup', 'entdepu','insnum']
+    immigration_df = immigration_df.drop(*cols)
+
+    # drop nan and duplicate
+    ports_df = clean_dataframe(ports_df)
+    immigration_df = clean_dataframe(immigration_df)
+    demographics_df = clean_dataframe(demographics_df)
+
     logger.info("Data cleaned")
 
     logger.info("Checking data quality")
+    quality_checks(immigration_df, 'immigration')
     logger.info("Data quality checked")
     
     logger.info("Creating tables")
@@ -84,15 +98,10 @@ def create_demographics_dim_table(spark, demographics_df, ports_df):
                     ON lower(cd.city) = lower(sp.city) AND cd.state_code = sp.state_code
         """)
 
-def clean_demographics_data(demographics_df):
-    logger.info("Clean demographics dataset.")
-    return demographics_df \
-        .dropDuplicates()
-
-def clean_ports_data(ports_df):
-    logger.info("Clean ports data.")
+def clean_dataframe(df):
+    logger.info("Clean dataframe.")
     
-    return ports_df \
+    return df \
         .dropna() \
         .dropDuplicates()
 
@@ -122,11 +131,12 @@ def get_dimension_data(spark, label):
     sas_data = get_data_from_SAS_description_file(label)
     df = pd.DataFrame(data=sas_data,columns=['code','name'])
 
-    df[['city', 'state_code']] = \
-        df['name'].str.rsplit(',', 1, expand=True)
+    if (label == 'I94PORT'):
+        df[['city', 'state_code']] = \
+            df['name'].str.rsplit(',', 1, expand=True)
 
-    df.to_csv('output/file.csv', index=False)
-    return spark.read.csv('file.csv', header=True)
+    df.to_csv(OUTPUT_DATA_DIR + 'file.csv', index=False)
+    return spark.read.csv(OUTPUT_DATA_DIR + 'file.csv', header=True)
 
 def create_immigration_fact_table(spark, immigration_df, ports_df):
     immigration_df.createOrReplaceTempView('staging_immigration_data')    
@@ -141,7 +151,6 @@ def create_immigration_fact_table(spark, immigration_df, ports_df):
                 sid.arrdate AS arrival_date,
                 sid.depdate AS departure_date,
                 sid.i94bir AS age,
-                sid.occup AS occupation,
                 sid.gender AS gender,
                 sid.biryear AS birth_year,
                 sid.dtaddto AS entry_date,
@@ -174,6 +183,29 @@ def get_data_from_SAS_description_file(label):
         code_value_list.append((code, value, ))
 
     return code_value_list
+
+def quality_checks(df, table_name):
+    total_count = df.count()
+
+    if total_count == 0:
+        print(f"Data quality check failed for {table_name} with zero records!")
+    else:
+        print(f"Data quality check passed for {table_name} with {total_count:,} records.")
+    return 0
+
+def visualize_missing_values(df):  
+    nulls_df = df.select([count(when(isnan(c) | isnull(c), c)).alias(c) for c in df.columns]).toPandas().transpose()
+    nulls_df = nulls_df.reset_index()
+    nulls_df.columns = ['cols', 'values']
+    nulls_df['% missing values'] = 100*nulls_df['values']/df.count()
+    nulls_df
+
+    plt.rcdefaults()
+    plt.figure(figsize=(10,5))
+    ax = sns.barplot(x="cols", y="% missing values", data=nulls_df)
+    ax.set_ylim(0, 100)
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=90)
+    plt.show()
 
 def get_spark_session():
     """Create spark session."""
