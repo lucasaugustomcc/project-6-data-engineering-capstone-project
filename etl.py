@@ -31,7 +31,7 @@ def main():
     logger.info("Datasets loaded.")
 
     logger.info("Loading dimensional data into Spark dataframes")
-    ports_df = get_dimension_data(spark,'I94PORT')
+    ports_df = get_dimension_data_from_SAS_description(spark,'I94PORT')
     logger.info("Dimensional data loaded.")
 
     logger.info("Cleaning data")
@@ -49,26 +49,33 @@ def main():
 
     logger.info("Checking data quality")
     quality_checks(immigration_df, 'immigration')
+    quality_checks(ports_df, 'ports')
+    quality_checks(demographics_df, 'demographics')
     logger.info("Data quality checked")
     
     logger.info("Creating tables")
     fact_table_df = create_immigration_fact_table(spark, immigration_df, ports_df)
     logger.info("Fact table created")
-
     demographics_table = create_demographics_dim_table(spark, demographics_df, ports_df)
     logger.info("Demographics dimension table created")
 
     logger.info("Tables created")
 
-    # Save tables in parquet format
     logger.info("Writing data in parquet format")
 
     fact_table_df.write.mode('overwrite').partitionBy('entry_year', 'entry_month', 'port_code').parquet(
         OUTPUT_DATA_DIR + "fact_immigrations.parquet")
     demographics_table.write.mode('overwrite').partitionBy('state_code').parquet(
         OUTPUT_DATA_DIR + "dim_city_demographics.parquet")
+    ports_df.write.mode('overwrite').parquet(OUTPUT_DATA_DIR + "dim_ports.parquet")
 
     logger.info("Writing data is done.")
+
+def get_fact_table(spark):
+    return spark.read.parquet(OUTPUT_DATA_DIR + "fact_immigrations.parquet")
+
+def get_dimension_table(spark, label):
+    return spark.read.parquet(OUTPUT_DATA_DIR + label)
 
 def create_demographics_dim_table(spark, demographics_df, ports_df):
     
@@ -107,7 +114,8 @@ def clean_dataframe(df):
 
 def get_immigration_data(spark):
     logger.info("Reading immigration data")
-    return spark.read.parquet(I94_DATA_DIR)
+    #return spark.read.parquet(I94_DATA_DIR)
+    return spark.read.csv('data/input/immigration_data_sample.csv', header = True)
 
 def get_demographics_data(spark):
     schema = StructType([
@@ -127,7 +135,7 @@ def get_demographics_data(spark):
     logger.info("Reading demographics data")
     return spark.read.csv(DEMOGRAPHICS_DATA_FILE, sep=';', header=True, schema=schema)
 
-def get_dimension_data(spark, label):
+def get_dimension_data_from_SAS_description(spark, label):
     sas_data = get_data_from_SAS_description_file(label)
     df = pd.DataFrame(data=sas_data,columns=['code','name'])
 
